@@ -106,7 +106,7 @@ class CompilerV1Test extends PropSpec with PropertyChecks with Matchers with Scr
 
   treeTypeTest("Invalid LET")(
     ctx = typeCheckerContext,
-    expr = Expressions.BLOCK(Expressions.LET(Expressions.PART.INVALID("###", "it is invalid!"), Expressions.TRUE), Expressions.REF("x")),
+    expr = Expressions.BLOCK(Expressions.LET(Expressions.PART.INVALID("###", "it is invalid!"), Expressions.TRUE, Seq.empty), Expressions.REF("x")),
     expectedResult = Left("Typecheck failed: it is invalid!: ###")
   )
 

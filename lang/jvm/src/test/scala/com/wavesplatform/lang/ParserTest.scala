@@ -17,8 +17,10 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
 
   private def parseOne(x: String): EXPR = Parser(x) match {
     case Success(r, _) =>
-      if (r.size > 1) throw new TestFailedException(s"Expected 1 expression, but got ${r.size}: $r", 0)
-      else r.head
+      if (r.size > 1) {
+        println(s"Can't parse (len=${x.length}): <START>\n$x\n<END>")
+        throw new TestFailedException(s"Expected 1 expression, but got ${r.size}: $r", 0)
+      } else r.head
     case e @ Failure(_, i, _) =>
       println(
         s"Can't parse (len=${x.length}): <START>\n$x\n<END>\nError: $e\nPosition ($i): '${x.slice(i, i + 1)}'\nTraced:\n${e.extra.traced.fullStack
@@ -153,7 +155,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
       val script = s"""let $keyword = 1
                       |true""".stripMargin
       parseOne(script) shouldBe BLOCK(
-        LET(PART.INVALID(keyword, "keywords are restricted"), CONST_LONG(1)),
+        LET(PART.INVALID(keyword, "keywords are restricted"), CONST_LONG(1), Seq.empty),
         TRUE
       )
     }
@@ -253,7 +255,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
       """.stripMargin
     ) shouldBe GETTER(
       BLOCK(
-        LET("yyy", FUNCTION_CALL("aaa", List(REF("bbb")))),
+        LET("yyy", FUNCTION_CALL("aaa", List(REF("bbb"))), Seq.empty),
         FUNCTION_CALL("xxx", List(REF("yyy")))
       ),
       "zzz"
@@ -283,7 +285,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
 
     parseAll(script) shouldBe Seq(
       BLOCK(
-        LET("C", CONST_LONG(1)),
+        LET("C", CONST_LONG(1), Seq.empty),
         REF("foo")
       ),
       INVALID("#@", CONST_LONG(2)),
@@ -297,7 +299,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
         |# /
         |true""".stripMargin
     parseOne(script) shouldBe BLOCK(
-      LET("C", CONST_LONG(1)),
+      LET("C", CONST_LONG(1), Seq.empty),
       INVALID("#/", TRUE)
     )
   }
@@ -310,7 +312,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
     parseOne(script) shouldBe INVALID(
       "#/",
       BLOCK(
-        LET("C", CONST_LONG(1)),
+        LET("C", CONST_LONG(1), Seq.empty),
         TRUE
       )
     )
@@ -323,7 +325,7 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
         |# /""".stripMargin
     parseAll(script) shouldBe Seq(
       BLOCK(
-        LET("C", CONST_LONG(1)),
+        LET("C", CONST_LONG(1), Seq.empty),
         TRUE
       ),
       INVALID("#/")
@@ -340,8 +342,8 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
         | }
         |
       """.stripMargin
-    parse(code) shouldBe MATCH(REF("tx"),
-                               List(MATCH_CASE(Some("a"), List("TypeA"), CONST_LONG(0)), MATCH_CASE(Some("b"), List("TypeB"), CONST_LONG(1))))
+    parseOne(code) shouldBe MATCH(REF("tx"),
+                                  List(MATCH_CASE(Some("a"), List("TypeA"), CONST_LONG(0)), MATCH_CASE(Some("b"), List("TypeB"), CONST_LONG(1))))
   }
 
   property("multiple union type matching") {
@@ -354,9 +356,9 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
         | }
         |
       """.stripMargin
-    parse(code) shouldBe MATCH(REF("tx"),
-                               List(MATCH_CASE(Some("txa"), List("TypeA"), CONST_LONG(0)),
-                                    MATCH_CASE(Some("underscore"), List("TypeB", "TypeC"), CONST_LONG(1))))
+    parseOne(code) shouldBe MATCH(REF("tx"),
+                                  List(MATCH_CASE(Some("txa"), List("TypeA"), CONST_LONG(0)),
+                                       MATCH_CASE(Some("underscore"), List("TypeB", "TypeC"), CONST_LONG(1))))
   }
 
   property("matching expression") {
@@ -369,20 +371,78 @@ class ParserTest extends PropSpec with PropertyChecks with Matchers with ScriptG
         | }
         |
       """.stripMargin
-    parse(code) shouldBe MATCH(
+    parseOne(code) shouldBe MATCH(
       BINARY_OP(FUNCTION_CALL("foo", List(REF("x"))), BinaryOperation.SUM_OP, REF("bar")),
       List(MATCH_CASE(Some("x"), List("TypeA"), CONST_LONG(0)), MATCH_CASE(Some("y"), List("TypeB", "TypeC"), CONST_LONG(1)))
     )
   }
+
+  property("pattern matching with no cases") {
+    parseOne("match tx { } ") shouldBe INVALID("pattern matching requires case branches")
+  }
+
+  property("pattern matching with invalid case - no variable, type and expr are defined") {
+    parseOne("match tx { case => } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.INVALID("", "expected variable name")), List(PART.INVALID("", "expected types")), INVALID("expected expression")))
+    )
+  }
+
+  property("pattern matching with invalid case - no variable and type are defined") {
+    parseOne("match tx { case => 1} ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.INVALID("", "expected variable name")), List(PART.INVALID("", "expected types")), CONST_LONG(1)))
+    )
+  }
+
+  property("pattern matching with invalid case - no type and expr are defined") {
+    parseOne("match tx { case TypeA => } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.VALID("TypeA")), List(PART.INVALID("", "expected types")), INVALID("expected expression")))
+    )
+  }
+
+//  property("pattern matching with invalid case - no variable is defined") {
+//    parseOne("match tx { case TypeA => } ") shouldBe MATCH(
+//      REF("tx"),
+//      List(MATCH_CASE(Some(PART.VALID("TypeA")), List(PART.INVALID("", "expected types")), INVALID("expected expression")))
+//    )
+//  }
+
+  property("pattern matching with invalid case - no variable is defined") {
+    parseOne("match tx { case  :TypeA => 1 } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.INVALID("", "expected variable name")), List(PART.VALID("TypeA")), CONST_LONG(1)))
+    )
+  }
+
+  property("pattern matching with invalid case - no type is defined") {
+    parseOne("match tx { case  x => 1 } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.VALID("x")), List(PART.INVALID("", "expected types")), CONST_LONG(1)))
+    )
+  }
+
+  property("pattern matching with default case - no type is defined, one separator") {
+    parseOne("match tx { case  _: | => 1 } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.VALID("_")), Seq(PART.INVALID("", "expected types"), PART.INVALID("", "expected types")), CONST_LONG(1)))
+    )
+  }
+
+  property("pattern matching with default case - no type is defined, multiple separators") {
+    parseOne("match tx { case  _: | => 1 } ") shouldBe MATCH(
+      REF("tx"),
+      List(MATCH_CASE(Some(PART.VALID("_")), Seq(PART.INVALID("", "expected types"), PART.INVALID("", "expected types")), CONST_LONG(1)))
+    )
+  }
+
+  parseOne("match tx { case  _: |||| => 1 } ") shouldBe MATCH(
+    REF("tx"),
+    List(MATCH_CASE(Some(PART.VALID("_")), (1 to 5).map(_ => PART.INVALID("", "expected types")), CONST_LONG(1)))
+  )
+
   property("failure to match") {
-    isParsed("match tx { } ") shouldBe false
-    isParsed("match tx { case => } ") shouldBe false
-    isParsed("match tx { case => 1} ") shouldBe false
-    isParsed("match tx { case TypeA => } ") shouldBe false
-    isParsed("match tx { case TypeA => 1 } ") shouldBe false
-    isParsed("match tx { case  :TypeA => 1 } ") shouldBe false
-    isParsed("match tx { case  x => 1 } ") shouldBe false
-    isParsed("match tx { case  _: | => 1 } ") shouldBe false
-    isParsed("match tx { case  _: |||| => 1 } ") shouldBe false
+    parseOne("match tx { case TypeA => 1 } ") shouldBe false
   }
 }

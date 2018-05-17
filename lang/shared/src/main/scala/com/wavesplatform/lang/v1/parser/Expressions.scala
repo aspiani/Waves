@@ -51,6 +51,11 @@ object Expressions {
   }
 
   case class MATCH_CASE(newVarName: Option[PART[String]], types: Seq[PART[String]], expr: EXPR)
+  object MATCH_CASE {
+    def apply(newVarName: Option[String], types: List[String], expr: EXPR): MATCH_CASE =
+      MATCH_CASE(newVarName.map(PART.VALID(_)), types.map(PART.VALID(_)), expr)
+  }
+
   case class MATCH(expr: EXPR, cases: Seq[MATCH_CASE]) extends EXPR
 
   case class INVALID(message: String, next: Option[EXPR] = None) extends EXPR

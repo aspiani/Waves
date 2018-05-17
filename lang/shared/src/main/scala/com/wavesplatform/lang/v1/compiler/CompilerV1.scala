@@ -178,9 +178,7 @@ object CompilerV1 {
     ref.key.toEither.flatMap { key =>
       ctx.varDefs
         .get(key)
-        .map { tpe =>
-          REF(key = key, tpe = tpe)
-        }
+        .map(REF(key, _))
         .toRight(s"A definition of '$key' is not found")
     }
   }

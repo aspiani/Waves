@@ -17,7 +17,7 @@ object Parser {
   import White._
   import fastparse.noApi._
 
-  private val keywords       = Set("let", "base58", "true", "false", "if", "then", "else")
+  private val keywords       = Set("let", "base58", "true", "false", "if", "then", "else", "match", "case")
   private val lowerChar      = CharIn('a' to 'z')
   private val upperChar      = CharIn('A' to 'Z')
   private val char           = lowerChar | upperChar
@@ -101,9 +101,24 @@ object Parser {
   private case class Args(args: Seq[EXPR])      extends Accessor
   private case class ListIndex(index: EXPR)     extends Accessor
 
-  private val typesP: P[Seq[PART[String]]] = varName.rep(min = 1, sep = "|")
-  private val matchCaseP: P[MATCH_CASE]    = P("case" ~ varName ~ ":" ~ typesP ~ "=>" ~ expr).map { case (v, types, e) => MATCH_CASE(Some(v), types, e) }
-  private lazy val matchP: P[MATCH]        = P("match" ~ expr ~ "{" ~ matchCaseP.rep(min = 1) ~ "}").map { case (e, cases) => MATCH(e, cases.toList) }
+  private val typesP: P[Seq[Option[PART[String]]]] = varName.?.rep(sep = "|").log("typesP")
+  private val matchCaseP: P[MATCH_CASE] = P("case" ~/ (varName | "_".!.map(PART.VALID(_))).? ~ (":" ~ typesP).? ~ "=>" ~/ expr2.?)
+    .map {
+      case (v, types, e) =>
+        println(s"$v, $types, $e")
+        MATCH_CASE(
+          newVarName = v.orElse(Some(PART.INVALID("", "expected variable name"))),
+          types = types.getOrElse(Seq(Some(PART.INVALID("", "expected types")))).map(_.getOrElse(PART.INVALID("", "expected types"))),
+          expr = e.getOrElse(INVALID("expected expression"))
+        )
+    }
+    .log("matchCaseP")
+  private lazy val matchP: P[EXPR] = P("match" ~/ expr ~ "{" ~ NoCut(matchCaseP).rep ~ "}")
+    .map {
+      case (_, Nil)   => INVALID("pattern matching requires case branches")
+      case (e, cases) => MATCH(e, cases.toList)
+    }
+    .log("matchP")
 
   private val accessP: P[Accessor] = P(("." ~~ varName).map(Getter) | ("(" ~/ functionCallArgs.map(Args) ~ ")")) | ("[" ~/ expr.map(ListIndex) ~ "]")
 
@@ -143,13 +158,26 @@ object Parser {
     case x                               => INVALID(xs, x)
   }
 
-  private val atom      = P(ifP | matchP | byteVectorP | stringP | numberP | trueP | falseP | block | maybeAccessP | invalid)
+  private val atom      = P(ifP | NoCut(matchP) | byteVectorP | stringP | numberP | trueP | falseP | block | maybeAccessP | invalid)
   private lazy val expr = P(binaryOp(opsByPriority) | atom)
 
   private def binaryOp(rest: List[(String, BinaryOperation)]): P[EXPR] = rest match {
     case Nil => atom
     case (lessPriorityOp, kind) :: restOps =>
       val operand = binaryOp(restOps)
+      P(operand ~ (lessPriorityOp.!.map(_ => kind) ~ operand).rep()).map {
+        case (left: EXPR, r: Seq[(BinaryOperation, EXPR)]) =>
+          r.foldLeft(left) { case (acc, (currKind, currOperand)) => BINARY_OP(acc, currKind, currOperand) }
+      }
+  }
+
+  private val atom2      = P(ifP | NoCut(matchP) | byteVectorP | stringP | numberP | trueP | falseP | block | maybeAccessP)
+  private lazy val expr2 = P(binaryOp2(opsByPriority) | atom2)
+
+  private def binaryOp2(rest: List[(String, BinaryOperation)]): P[EXPR] = rest match {
+    case Nil => atom2
+    case (lessPriorityOp, kind) :: restOps =>
+      val operand = binaryOp2(restOps)
       P(operand ~ (lessPriorityOp.!.map(_ => kind) ~ operand).rep()).map {
         case (left: EXPR, r: Seq[(BinaryOperation, EXPR)]) =>
           r.foldLeft(left) { case (acc, (currKind, currOperand)) => BINARY_OP(acc, currKind, currOperand) }
